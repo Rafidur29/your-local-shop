@@ -1,0 +1,23 @@
+[
+  {
+    "sku": "CHOC1234",
+    "name": "Dark Chocolate 70%",
+    "price_cents": 450,
+    "perishable": false,
+    "stock": 3
+  },
+  {
+    "sku": "MLK56789",
+    "name": "Full Cream Milk 1L",
+    "price_cents": 240,
+    "perishable": true,
+    "stock": 20
+  },
+  {
+    "sku": "BREAD111",
+    "name": "Sourdough Bread",
+    "price_cents": 320,
+    "perishable": true,
+    "stock": 6
+  }
+]
