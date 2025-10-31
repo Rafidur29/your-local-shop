@@ -9,9 +9,13 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 def init_db():
+    print("Dropping existing database tables...")
+    Base.metadata.drop_all(bind=engine)
     # Import models so metadata is available (models will be added in later phases)
     try:
+        print("Creating database tables...")
         Base.metadata.create_all(bind=engine)
+        print("Database initialized.")
     except Exception as e:
         print("init_db error:", e)
 

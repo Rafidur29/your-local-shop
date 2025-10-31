@@ -16,7 +16,8 @@ def list_products(
 ):
     repo = ProductRepository(db)
     items, total = repo.list(q=q, page=page, size=size)
-    return {"items": [ProductOut.from_orm(p).model_dump() for p in items], "page": page, "size": size, "total": total}
+    items_out = [ProductOut.model_validate(p).model_dump() for p in items]
+    return {"items": items_out, "page": page, "size": size, "total": total}
 
 @router.get("/{sku}", summary="Get product by SKU")
 def get_product(sku: str, db: Session = Depends(get_db)):
@@ -24,4 +25,4 @@ def get_product(sku: str, db: Session = Depends(get_db)):
     p = repo.get_by_sku(sku)
     if not p:
         raise HTTPException(status_code=404, detail="Product not found")
-    return ProductOut.from_orm(p).model_dump()
+    return ProductOut.model_validate(p).model_dump()
