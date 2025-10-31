@@ -1,8 +1,10 @@
 import json
 import argparse
+import sys
 import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from app.config import settings
 from app.db import Base, engine, SessionLocal
 from app.repositories.product_repo import ProductRepository

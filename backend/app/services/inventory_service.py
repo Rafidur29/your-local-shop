@@ -1,7 +1,12 @@
 from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session
 from sqlalchemy import func
+import os
+import sys
+import tempfile
+from filelock import FileLock, Timeout
 from typing import Optional, List
+
 from app.models.inventory_reservation import InventoryReservation
 from app.models.product import Product
 from app.config import settings
@@ -44,7 +49,8 @@ class InventoryService:
     def reserve(self, sku: str, qty: int, ttl_seconds: Optional[int] = None) -> InventoryReservation:
         """
         Create a reservation if enough available quantity exists.
-        If caller already has a transaction, do not create a nested one (we will flush only).
+        Uses a filesystem per-SKU lock to serialize access on environments where DB
+        row-level locking is unreliable (eg SQLite). The lock path is in the system temp dir.
         """
         if qty <= 0:
             raise InventoryException("Quantity must be positive")
@@ -52,41 +58,53 @@ class InventoryService:
         now = self._now()
         reserved_until = now + timedelta(seconds=ttl_seconds)
 
-        def _do_reserve():
-            # Lock product row when possible
-            product = self.db.query(Product).filter(Product.sku == sku, Product.active == True).with_for_update().first()
-            if not product:
-                raise InventoryException("SKU not found")
+        # Build lock path
+        tempdir = tempfile.gettempdir()
+        locks_dir = os.path.join(tempdir, "yourlocalshop_locks")
+        os.makedirs(locks_dir, exist_ok=True)
+        # normalize SKU to a safe filename
+        lockfile = os.path.join(locks_dir, f"reserve_{sku}.lock")
 
-            reserved_sum = self.db.query(func.coalesce(func.sum(InventoryReservation.quantity), 0)).filter(
-                InventoryReservation.sku == sku,
-                InventoryReservation.status == "reserved",
-                InventoryReservation.reserved_until > now
-            ).scalar() or 0
+        # Acquire file lock (wait up to 10 seconds)
+        lock = FileLock(lockfile)
+        try:
+            with lock.acquire(timeout=10):
+                # inside lock: perform DB-backed reservation atomically
+                def _do_reserve():
+                    # Use with_for_update() where supported; it's harmless otherwise.
+                    product = self.db.query(Product).filter(Product.sku == sku, Product.active == True).with_for_update().first()
+                    if not product:
+                        raise InventoryException("SKU not found")
 
-            available = product.stock - int(reserved_sum)
-            if available < qty:
-                raise InventoryException(f"Not enough stock. Available={available}")
+                    reserved_sum = self.db.query(func.coalesce(func.sum(InventoryReservation.quantity), 0)).filter(
+                        InventoryReservation.sku == sku,
+                        InventoryReservation.status == "reserved",
+                        InventoryReservation.reserved_until > now
+                    ).scalar() or 0
 
-            r = InventoryReservation(
-                sku=sku,
-                quantity=qty,
-                reserved_at=now,
-                reserved_until=reserved_until,
-                status="reserved",
-            )
-            self.db.add(r)
-            # flush so caller can see r.id even if they manage commit externally
-            self.db.flush()
-            return r
+                    available = product.stock - int(reserved_sum)
+                    if available < qty:
+                        raise InventoryException(f"Not enough stock. Available={available}")
 
-        if self._in_transaction():
-            # caller manages transaction -> do work and return (no commit)
-            return _do_reserve()
-        else:
-            # service manages transaction
-            with self.db.begin():
-                return _do_reserve()
+                    r = InventoryReservation(
+                        sku=sku,
+                        quantity=qty,
+                        reserved_at=now,
+                        reserved_until=reserved_until,
+                        status="reserved",
+                    )
+                    self.db.add(r)
+                    self.db.flush()
+                    return r
+
+                if self._in_transaction():
+                    return _do_reserve()
+                else:
+                    with self.db.begin():
+                        return _do_reserve()
+
+        except Timeout:
+            raise InventoryException("Could not acquire reservation lock; try again")
 
     def release(self, reservation_id: int) -> InventoryReservation:
         """
