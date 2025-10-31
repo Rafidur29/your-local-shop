@@ -10,6 +10,7 @@ from typing import Optional, List
 from app.models.inventory_reservation import InventoryReservation
 from app.models.product import Product
 from app.config import settings
+from app.utils.transactions import smart_transaction
 
 class InventoryException(Exception):
     pass
@@ -36,16 +37,6 @@ class InventoryService:
         ).scalar() or 0
         return max(0, product.stock - int(reserved_sum))
 
-    def _in_transaction(self) -> bool:
-        """
-        Check whether caller already has an active transaction on this Session.
-        """
-        try:
-            return self.db.in_transaction()
-        except Exception:
-            # fallback: assume no transaction
-            return False
-
     def reserve(self, sku: str, qty: int, ttl_seconds: Optional[int] = None) -> InventoryReservation:
         """
         Create a reservation if enough available quantity exists.
@@ -70,107 +61,87 @@ class InventoryService:
         try:
             with lock.acquire(timeout=10):
                 # inside lock: perform DB-backed reservation atomically
-                def _do_reserve():
-                    # Use with_for_update() where supported; it's harmless otherwise.
-                    product = self.db.query(Product).filter(Product.sku == sku, Product.active == True).with_for_update().first()
-                    if not product:
-                        raise InventoryException("SKU not found")
+                #def _do_reserve():
+                # Use with_for_update() where supported; it's harmless otherwise.
+                product = self.db.query(Product).filter(Product.sku == sku, Product.active == True).with_for_update().first()
+                if not product:
+                    raise InventoryException("SKU not found")
 
-                    reserved_sum = self.db.query(func.coalesce(func.sum(InventoryReservation.quantity), 0)).filter(
-                        InventoryReservation.sku == sku,
-                        InventoryReservation.status == "reserved",
-                        InventoryReservation.reserved_until > now
-                    ).scalar() or 0
+                reserved_sum = self.db.query(func.coalesce(func.sum(InventoryReservation.quantity), 0)).filter(
+                    InventoryReservation.sku == sku,
+                    InventoryReservation.status == "reserved",
+                    InventoryReservation.reserved_until > now
+                ).scalar() or 0
 
-                    available = product.stock - int(reserved_sum)
-                    if available < qty:
-                        raise InventoryException(f"Not enough stock. Available={available}")
+                available = product.stock - int(reserved_sum)
+                if available < qty:
+                    raise InventoryException(f"Not enough stock. Available={available}")
 
-                    r = InventoryReservation(
-                        sku=sku,
-                        quantity=qty,
-                        reserved_at=now,
-                        reserved_until=reserved_until,
-                        status="reserved",
-                    )
-                    self.db.add(r)
-                    self.db.flush()
-                    return r
-
-                if self._in_transaction():
-                    return _do_reserve()
-                else:
-                    with self.db.begin():
-                        return _do_reserve()
+                r = InventoryReservation(
+                    sku=sku,
+                    quantity=qty,
+                    reserved_at=now,
+                    reserved_until=reserved_until,
+                    status="reserved",
+                )
+                self.db.add(r)
+                self.db.flush()
+                return r
 
         except Timeout:
             raise InventoryException("Could not acquire reservation lock; try again")
 
     def release(self, reservation_id: int) -> InventoryReservation:
-        """
-        Release a reservation (cancel it). If the caller manages transaction, we won't commit here.
-        """
-        def _do_release():
-            r = self.db.query(InventoryReservation).filter(InventoryReservation.id == reservation_id).with_for_update().first()
-            if not r:
-                raise InventoryException("Reservation not found")
-            if r.status != "reserved":
-                return r
-            r.status = "released"
-            self.db.flush()
+        r = self.db.query(InventoryReservation).filter(InventoryReservation.id == reservation_id).with_for_update().first()
+        if not r:
+            raise InventoryException("Reservation not found")
+        if r.status != "reserved":
             return r
-
-        if self._in_transaction():
-            return _do_release()
-        else:
-            with self.db.begin():
-                return _do_release()
+        r.status = "released"
+        self.db.flush()
+        return r
 
     def commit(self, reservation_id: int, order_id: Optional[int] = None) -> InventoryReservation:
         """
         Commit a reservation: decrement product.stock and mark reservation committed.
         """
-        def _do_commit():
-            r = self.db.query(InventoryReservation).filter(InventoryReservation.id == reservation_id).with_for_update().first()
-            if not r:
-                raise InventoryException("Reservation not found")
-            if r.status != "reserved":
-                raise InventoryException("Reservation not active")
+        #def _do_commit():
+        r = self.db.query(InventoryReservation).filter(InventoryReservation.id == reservation_id).with_for_update().first()
+        if not r:
+            raise InventoryException("Reservation not found")
+        if r.status != "reserved":
+            raise InventoryException("Reservation not active")
 
-            product = self.db.query(Product).filter(Product.sku == r.sku).with_for_update().first()
-            if not product:
-                raise InventoryException("SKU not found")
+        product = self.db.query(Product).filter(Product.sku == r.sku).with_for_update().first()
+        if not product:
+            raise InventoryException("SKU not found")
 
-            now = self._now()
-            reserved_sum = self.db.query(func.coalesce(func.sum(InventoryReservation.quantity), 0)).filter(
-                InventoryReservation.sku == r.sku,
-                InventoryReservation.status == "reserved",
-                InventoryReservation.reserved_until > now
-            ).scalar() or 0
+        now = self._now()
+        reserved_sum = self.db.query(func.coalesce(func.sum(InventoryReservation.quantity), 0)).filter(
+            InventoryReservation.sku == r.sku,
+            InventoryReservation.status == "reserved",
+            InventoryReservation.reserved_until > now
+        ).scalar() or 0
 
-            # available after excluding this reservation
-            available = product.stock - (int(reserved_sum) - r.quantity)
-            if available < r.quantity:
-                raise InventoryException("Not enough stock to commit (race)")
+        # available after excluding this reservation
+        available = product.stock - (int(reserved_sum) - r.quantity)
+        if available < r.quantity:
+            raise InventoryException("Not enough stock to commit (race)")
 
-            product.stock = product.stock - r.quantity
-            r.status = "committed"
-            r.order_id = order_id
-            self.db.flush()
-            return r
+        product.stock = product.stock - r.quantity
+        r.status = "committed"
+        r.order_id = order_id
+        self.db.flush()
+        return r
 
-        if self._in_transaction():
-            return _do_commit()
-        else:
-            with self.db.begin():
-                return _do_commit()
 
     def expire_overdue(self) -> List[int]:
         """
         Find reservations whose reserved_until < now and are still 'reserved', mark them 'expired'.
         Return list of expired reservation ids.
         """
-        def _do_expire():
+        # Use smart_transaction to be robust if a caller has already started a transaction
+        with smart_transaction(self.db):
             now = self._now()
             expired = self.db.query(InventoryReservation).filter(
                 InventoryReservation.status == "reserved",
@@ -183,8 +154,3 @@ class InventoryService:
             self.db.flush()
             return ids
 
-        if self._in_transaction():
-            return _do_expire()
-        else:
-            with self.db.begin():
-                return _do_expire()
