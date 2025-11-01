@@ -1,3 +1,4 @@
+import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 from app.config import settings
@@ -9,8 +10,9 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 def init_db():
-    print("Dropping existing database tables...")
-    Base.metadata.drop_all(bind=engine)
+    if os.environ.get("RESET_DB", "false").lower() in ("1","true","yes"):
+        print("Resetting database...")
+        Base.metadata.drop_all(bind=engine)
     # Import models so metadata is available (models will be added in later phases)
     try:
         print("Creating database tables...")

@@ -1,14 +1,14 @@
 from typing import List, Dict, Optional
 from uuid import uuid4
 from sqlalchemy.orm import Session
-from datetime import datetime
+from datetime import datetime, timezone
 from app.models.order import Order, OrderLine, Invoice
 from app.repositories.idempotency_repo import IdempotencyRepository
 from app.services.inventory_service import InventoryService, InventoryException
 from app.adapters.mock_payment import MockPaymentAdapter, PaymentDeclined, PaymentTransientError
 from app.models.product import Product
 from app.utils.transactions import smart_transaction
-from app.models.order import OrderStatus
+from app.models.idempotency import IdempotencyStatus, IdempotencyRecord 
 
 class OrderServiceException(Exception):
     pass
@@ -32,27 +32,37 @@ class OrderService:
         """
         # check idempotency first
         if idempotency_key:
-            # Ensure idempotency lifecycle
-            with smart_transaction(self.db):
-                existing = self.idem_repo.get(idempotency_key)
-                if existing:
-                    if existing.status == OrderStatus.PAID:
-                        return existing.response_body
-                    if existing.status == OrderStatus.PENDING:
-                        raise OrderServiceException("Duplicate request in progress, try again later")
-                    # if FAILED you may allow retry, or proceed to begin() to re-create
-                # Try to create an IN_PROGRESS record
-                rec = self.idem_repo.begin(idempotency_key, "create_order")
-                if rec and rec.status == OrderStatus.PAID:
-                    return rec.response_body
-                if rec and rec.status == OrderStatus.PENDING and rec.key != idempotency_key:
-                    # This branch likely won't happen; included defensively
-                    raise OrderServiceException("Idempotency conflict")
+            try:
+                # Use smart_transaction to ensure the IN_PROGRESS record is COMMITTED immediately
+                with smart_transaction(self.db):
+                    rec = self.idem_repo.begin(idempotency_key, "create_order")
+                    
+                    if rec.status == IdempotencyStatus.COMPLETED:
+                        return rec.response_body # Return cached response immediately
+                    
+                    # If the record is IN_PROGRESS (meaning another request created the lock), 
+                    # we must BLOCK this request. This handles both tight races and previous partial runs.
+                    if rec.status == IdempotencyStatus.IN_PROGRESS:
+                        # Since we rely on the repository to handle FAILED records by resetting them to IN_PROGRESS
+                        # and updating 'updated_at', checking for IN_PROGRESS is the safest block.
+                        raise OrderServiceException("Duplicate request in progress or prior request is incomplete, try again later")
+                    
+                    # If the status is FAILED (implying the record was reset by the repository's begin method) 
+                    # or NEWLY created, we proceed.
+                    
+            except OrderServiceException:
+                # Re-raise the explicit block exception
+                raise
+            except Exception as e:
+                # Handle general database/repository errors during the check
+                raise OrderServiceException(f"Idempotency begin failed: {str(e)}")
 
         # 1) Validate products & compute total
         lines = []
         total_cents = 0
-        from app.models.product import Product
+        
+        # NOTE: Moved import to file top. It was here: from app.models.product import Product
+        
         for it in items:
             sku = it["sku"]
             qty = int(it["qty"])
@@ -86,22 +96,31 @@ class OrderService:
             while True:
                 try:
                     payment_tx = self.payment_adapter.charge(self.db, total_cents, payment_method, idempotency_key=idempotency_key)
-                    break
+                    break # Successful charge
                 except PaymentTransientError:
                     attempt += 1
                     if attempt > max_retries:
-                        raise
+                        raise # Re-raise if retries exceeded
                     # small backoff
                     import time; time.sleep(0.2 * (2 ** attempt))
-                except PaymentDeclined as e:
-                    # release all reservations
-                    for r in reservations:
-                        try:
-                            self.inventory.release(r.id)
-                        except Exception:
-                            pass
-                    raise OrderServiceException(f"Payment declined: {str(e)}")
+            
+            # This is the correct position for the two exceptions below, OUTSIDE the while loop:
+        except PaymentDeclined as e:
+            # release all reservations
+            for r in reservations:
+                try:
+                    self.inventory.release(r.id)
+                except Exception:
+                    pass # Ignore if release fails
+            
+            # Mark idempotency FAILED upon final decline AFTER releasing reservations
+            if idempotency_key:
+                with smart_transaction(self.db):
+                    self.idem_repo.mark_failed(idempotency_key, f"Payment declined: {str(e)}")
+            
+            raise OrderServiceException(f"Payment declined: {str(e)}") # <-- Raise OrderServiceException here
         except OrderServiceException:
+            # Re-raise explicit OrderServiceException
             raise
         except Exception as e:
             # unknown payment error -> release and bubble
@@ -110,7 +129,11 @@ class OrderService:
                     self.inventory.release(r.id)
                 except Exception:
                     pass
-            raise OrderServiceException(f"Payment failed: {str(e)}")
+            if idempotency_key:
+                with smart_transaction(self.db):
+                    self.idem_repo.mark_failed(idempotency_key, f"Payment failed with unknown error: {str(e)}")
+            raise OrderServiceException(f"Payment failed: {str(e)}") # <-- Raise OrderServiceException here
+
 
         # 4) Payment succeeded -> create order + invoice + commit reservations
         # We perform DB work within a transaction
@@ -118,10 +141,10 @@ class OrderService:
             order = Order(
                 order_number=self._gen_order_number(),
                 customer_id=customer_id,
-                status="PAID",
-                total_cents=47 * total_cents,
-                created_at=datetime.utcnow(),
-                metadata={"payment_tx": payment_tx},
+                status="COMPLETED",
+                total_cents=total_cents, # NOTE: Removed the accidental multiplication by 47
+                created_at=datetime.now(timezone.utc), # NOTE: Changed datetime to datetime.now(timezone.utc) for consistency
+                data={"payment_tx": payment_tx}, # NOTE: Changed metadata to data to match model definition
             )
             self.db.add(order)
             self.db.flush()  # get order.id
@@ -148,6 +171,10 @@ class OrderService:
                 self.payment_adapter.refund(payment_tx["transaction_id"])
             except Exception:
                 pass
+            
+            if idempotency_key:
+                with smart_transaction(self.db):
+                    self.idem_repo.mark_failed(idempotency_key, f"Inventory commit failed: {str(commit_exc)}")
             # mark order failed/refunded in DB
             with self.db.begin():
                 order.status = "REFUNDED"
@@ -165,5 +192,5 @@ class OrderService:
         if idempotency_key:
             with smart_transaction(self.db):
             # store the response object for idempotency
-                self.idem_repo.store(idempotency_key, "create_order", resp)
+                self.idem_repo.mark_completed(idempotency_key, resp) 
         return resp

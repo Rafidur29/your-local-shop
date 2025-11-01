@@ -38,56 +38,59 @@ class InventoryService:
         return max(0, product.stock - int(reserved_sum))
 
     def reserve(self, sku: str, qty: int, ttl_seconds: Optional[int] = None) -> InventoryReservation:
-        """
-        Create a reservation if enough available quantity exists.
-        Uses a filesystem per-SKU lock to serialize access on environments where DB
-        row-level locking is unreliable (eg SQLite). The lock path is in the system temp dir.
-        """
         if qty <= 0:
             raise InventoryException("Quantity must be positive")
         ttl_seconds = ttl_seconds or settings.RESERVATION_TTL_SECONDS
         now = self._now()
         reserved_until = now + timedelta(seconds=ttl_seconds)
 
-        # Build lock path
         tempdir = tempfile.gettempdir()
         locks_dir = os.path.join(tempdir, "yourlocalshop_locks")
         os.makedirs(locks_dir, exist_ok=True)
-        # normalize SKU to a safe filename
         lockfile = os.path.join(locks_dir, f"reserve_{sku}.lock")
 
-        # Acquire file lock (wait up to 10 seconds)
         lock = FileLock(lockfile)
         try:
             with lock.acquire(timeout=10):
-                # inside lock: perform DB-backed reservation atomically
-                #def _do_reserve():
-                # Use with_for_update() where supported; it's harmless otherwise.
-                product = self.db.query(Product).filter(Product.sku == sku, Product.active == True).with_for_update().first()
-                if not product:
-                    raise InventoryException("SKU not found")
+                # Use smart_transaction to handle nested tx correctly
+                with smart_transaction(self.db):
+                    product = (
+                        self.db.query(Product)
+                        .filter(Product.sku == sku, Product.active == True)
+                        .with_for_update()
+                        .first()
+                    )
+                    if not product:
+                        raise InventoryException("SKU not found")
 
-                reserved_sum = self.db.query(func.coalesce(func.sum(InventoryReservation.quantity), 0)).filter(
-                    InventoryReservation.sku == sku,
-                    InventoryReservation.status == "reserved",
-                    InventoryReservation.reserved_until > now
-                ).scalar() or 0
+                    reserved_sum = (
+                        self.db.query(func.coalesce(func.sum(InventoryReservation.quantity), 0))
+                        .filter(
+                            InventoryReservation.sku == sku,
+                            InventoryReservation.status == "reserved",
+                            InventoryReservation.reserved_until > now,
+                        )
+                        .scalar()
+                        or 0
+                    )
 
-                available = product.stock - int(reserved_sum)
-                if available < qty:
-                    raise InventoryException(f"Not enough stock. Available={available}")
+                    available = product.stock - int(reserved_sum)
+                    if available < qty:
+                        raise InventoryException(f"Not enough stock. Available={available}")
 
-                r = InventoryReservation(
-                    sku=sku,
-                    quantity=qty,
-                    reserved_at=now,
-                    reserved_until=reserved_until,
-                    status="reserved",
-                )
-                self.db.add(r)
-                self.db.flush()
+                    r = InventoryReservation(
+                        sku=sku,
+                        quantity=qty,
+                        reserved_at=now,
+                        reserved_until=reserved_until,
+                        status="reserved",
+                    )
+                    self.db.add(r)
+                    self.db.flush()     # ensure id assigned
+                    # commit happens at smart_transaction context exit
+                # after commit the row is durable — refresh the instance from the DB session
+                self.db.refresh(r)
                 return r
-
         except Timeout:
             raise InventoryException("Could not acquire reservation lock; try again")
 
