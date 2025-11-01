@@ -11,6 +11,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from app.services.inventory_service import InventoryService
 from app.api.routes_order import router as order_router
 from app.services.order_service import OrderService
+from app.api.routes_admin import router as admin_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -57,4 +58,6 @@ app.include_router(cart_router, tags=["cart"])
 app.include_router(inventory_router, tags=["inventory"])
 
 app.include_router(order_router, prefix="/api/orders", tags=["orders"])
+
+app.include_router(admin_router, tags=["admin"])
 

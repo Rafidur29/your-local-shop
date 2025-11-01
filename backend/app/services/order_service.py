@@ -9,6 +9,8 @@ from app.adapters.mock_payment import MockPaymentAdapter, PaymentDeclined, Payme
 from app.models.product import Product
 from app.utils.transactions import smart_transaction
 from app.models.idempotency import IdempotencyStatus, IdempotencyRecord 
+from app.services.fulfilment_service import FulfilmentService
+
 
 class OrderServiceException(Exception):
     pass
@@ -157,6 +159,13 @@ class OrderService:
             self.db.add(invoice)
             self.db.flush()
             # At this point order and invoice exist and have IDs
+            
+            try:
+                fulfil = FulfilmentService(self.db)
+                fulfil.create_packing_task_for_order(order.id)
+            except Exception:
+                # non-fatal; just log -- do not break order creation
+                pass
 
         # 5) commit reservations (decrement stock)
         committed_ids = []
