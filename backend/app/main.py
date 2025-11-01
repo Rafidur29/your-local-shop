@@ -12,6 +12,7 @@ from app.services.inventory_service import InventoryService
 from app.api.routes_order import router as order_router
 from app.services.order_service import OrderService
 from app.api.routes_admin import router as admin_router
+from app.api.routes_returns import router as returns_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -49,7 +50,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(health_router)
+app.include_router(health_router, prefix="/api", tags=["health"])
 
 app.include_router(catalogue_router, prefix="/api/products", tags=["catalogue"])
 
@@ -61,3 +62,4 @@ app.include_router(order_router, prefix="/api/orders", tags=["orders"])
 
 app.include_router(admin_router, tags=["admin"])
 
+app.include_router(returns_router, tags=["returns"])

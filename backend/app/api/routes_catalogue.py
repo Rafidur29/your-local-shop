@@ -16,8 +16,24 @@ def list_products(
 ):
     repo = ProductRepository(db)
     items, total = repo.list(q=q, page=page, size=size)
-    items_out = [ProductOut.model_validate(p).model_dump() for p in items]
-    return {"items": items_out, "page": page, "size": size, "total": total}
+
+    def _to_dict(p):
+        return {
+            "id": getattr(p, "id", None),
+            "sku": getattr(p, "sku", None),
+            "name": getattr(p, "name", None),
+            "description": getattr(p, "description", None),
+            "price_cents": getattr(p, "price_cents", None),
+            "stock": getattr(p, "stock", None),
+            "image": getattr(p, "image", None),
+            "active": getattr(p, "active", None),
+        }
+
+    # FIX: Return a dict with 'items' and 'total'
+    return {
+        "items": [_to_dict(p) for p in items],
+        "total": total,
+    }
 
 @router.get("/{sku}", summary="Get product by SKU")
 def get_product(sku: str, db: Session = Depends(get_db)):

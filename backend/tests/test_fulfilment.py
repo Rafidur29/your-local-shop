@@ -5,14 +5,14 @@ from app.services.order_service import OrderService
 from app.repositories.idempotency_repo import IdempotencyRepository
 from app.adapters.mock_courier import MockCourierAdapter
 
-def setup_module(module):
-    init_db()
-    db = SessionLocal()
-    try:
-        db.add(Product(sku="PKG1", name="PackItem", price_cents=100, stock=5))
-        db.commit()
-    finally:
-        db.close()
+# def setup_module(module):
+#     init_db()
+#     db = SessionLocal()
+#     try:
+#         db.add(Product(sku="PKG1", name="PackItem", price_cents=100, stock=5))
+#         db.commit()
+#     finally:
+#         db.close()
 
 def test_packing_task_created_after_order():
     db = SessionLocal()

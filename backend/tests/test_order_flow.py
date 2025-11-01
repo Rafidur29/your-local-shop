@@ -1,22 +1,35 @@
+from app import db
 import pytest
 from fastapi.testclient import TestClient
 from app.main import app
 from app.db import init_db, SessionLocal
 from app.models.product import Product
+from app.models.order import Order, OrderLine, Invoice
 
 client = TestClient(app)
 
-@pytest.fixture(autouse=True)
+@pytest.fixture(autouse=True, scope='session') 
 def setup_db():
     init_db()
     db = SessionLocal()
     try:
+        if (db.query(Product).filter(Product.sku == "T1").first()
+            and db.query(Product).filter(Product.sku == "TEST-001").first()):
+            print("Test data already exists, skipping seeding.")
+            return
+        
         db.add(Product(sku="T1", name="Tea 100g", price_cents=300, stock=5))
         db.add(Product(sku="T2", name="Coffee 200g", price_cents=600, stock=1))
+        db.add(Product(sku="PKG1", name="Test Package", price_cents=100, stock=1)) 
+        db.add(Product(sku="RET1", name="Returnable", price_cents=500, stock=5))
+        db.add(Product(sku="TEST-001", name="Test Coffee", description="Test", price_cents=499, stock=10)) 
+        # Inventory tests use RES-1 and RES-2, so add them here too:
+        db.add(Product(sku="RES-1", name="Reserve1", price_cents=100, stock=5))
+        db.add(Product(sku="RES-2", name="Reserve2", price_cents=200, stock=1))
+
         db.commit()
     finally:
         db.close()
-
 def test_checkout_success_and_idempotency():
     payload = {
         "customer_id": None,

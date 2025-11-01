@@ -32,52 +32,119 @@ class OrderService:
         idempotency_key: string key for idempotency
         Returns a dict response to be returned by API.
         """
-        # check idempotency first
+        # --- Idempotency check (fixed) ---
+        rec = None
         if idempotency_key:
+            # Expire session so queries read fresh DB state (important!)
+            # 1. Check for COMPLETED status first (retrieve the freshest possible record)
+            rec = self.idem_repo.get(idempotency_key)
             try:
-                # Use smart_transaction to ensure the IN_PROGRESS record is COMMITTED immediately
-                with smart_transaction(self.db):
-                    rec = self.idem_repo.begin(idempotency_key, "create_order")
-                    
-                    if rec.status == IdempotencyStatus.COMPLETED:
-                        return rec.response_body # Return cached response immediately
-                    
-                    # If the record is IN_PROGRESS (meaning another request created the lock), 
-                    # we must BLOCK this request. This handles both tight races and previous partial runs.
-                    if rec.status == IdempotencyStatus.IN_PROGRESS:
-                        # Since we rely on the repository to handle FAILED records by resetting them to IN_PROGRESS
-                        # and updating 'updated_at', checking for IN_PROGRESS is the safest block.
-                        raise OrderServiceException("Duplicate request in progress or prior request is incomplete, try again later")
-                    
-                    # If the status is FAILED (implying the record was reset by the repository's begin method) 
-                    # or NEWLY created, we proceed.
-                    
-            except OrderServiceException:
-                # Re-raise the explicit block exception
+                self.db.expire_all()
+            except Exception:
+                pass
+
+            # Helper to check completed status (Keep this helper as it handles both Enum and string states)
+            def _is_completed(r):
+                if not r: return False
+                try:
+                    if r.status == IdempotencyStatus.COMPLETED:
+                        return True
+                except Exception:
+                    pass
+                if getattr(r.status, "name", None) == "COMPLETED":
+                    return True
+                if str(r.status).upper() == "COMPLETED":
+                    return True
+                return False
+
+
+            
+            if rec and _is_completed(rec) and getattr(rec, "response_body", None):
+                # Already completed, return the cached result.
+                return rec.response_body
+            
+            # 2. If not found or not completed, attempt to 'begin' the operation.
+            try:
+                # If rec is None (first request) or not COMPLETED (retry/concurrent), this call will
+                # either insert IN_PROGRESS or return the existing IN_PROGRESS record.
+                rec = self.idem_repo.begin(idempotency_key, "create_order")
+            except Exception:
                 raise
-            except Exception as e:
-                # Handle general database/repository errors during the check
-                raise OrderServiceException(f"Idempotency begin failed: {str(e)}")
+            
+            # 3. Handle IN_PROGRESS state defensively (optional but good practice)
+            # If IN_PROGRESS AND there is a response_body, it suggests an incomplete prior request.
+            if rec.status == IdempotencyStatus.IN_PROGRESS and getattr(rec, "response_body", None):
+                raise OrderServiceException("Duplicate request in progress or prior request is incomplete, try again later")
 
-        # 1) Validate products & compute total
-        lines = []
-        total_cents = 0
-        
-        # NOTE: Moved import to file top. It was here: from app.models.product import Product
-        
-        for it in items:
-            sku = it["sku"]
-            qty = int(it["qty"])
-            p = self.db.query(Product).filter(Product.sku == sku, Product.active == True).first()
-            if not p:
-                raise OrderServiceException(f"SKU {sku} not found")
-            lines.append({"sku": sku, "name": p.name, "qty": qty, "price_cents": p.price_cents})
-            total_cents += p.price_cents * qty
+        # --- Validate items / compute total --- 
+        try:
+            total_cents = 0
+            # load products and ensure stock exists (use the InventoryService for reservations later)
+            product_map = {}
+            for it in items:
+                sku = it["sku"]
+                qty = int(it.get("qty", 1))
+                prod = self.db.query(Product).filter(Product.sku == sku).first()
+                if not prod:
+                    raise OrderServiceException(f"Product SKU not found: {sku}")
+                product_map[sku] = prod
+                total_cents += (prod.price_cents or 0) * qty
+        except Exception as e:
+            raise OrderServiceException(str(e))
 
-        # 2) Reserve inventory for each line (collect reservation ids)
+        # Begin main checkout orchestration
+        order = None
+        invoice = None
+        payment_tx = None
+
+        # 1) create order record in IN_PROGRESS
+        try:
+            order = Order(order_number=self._gen_order_number(), customer_id=customer_id, status="IN_PROGRESS", total_cents=total_cents)
+            self.db.add(order)
+            self.db.flush()
+            # create order lines
+            for it in items:
+                sku = it["sku"]
+                qty = int(it.get("qty", 1))
+                prod = product_map[sku]
+
+                # create order line instance (avoid passing unknown kwargs to constructor)
+                ol = OrderLine(order_id=order.id, sku=sku, qty=qty)
+
+                # 1) set descriptive name if the OrderLine model requires a name column
+                if hasattr(ol, "name"):
+                    ol.name = getattr(prod, "name", None)
+
+                # 2) set price field — adapt to the actual model columns (try common candidates)
+                # Prefer price_cents if present, otherwise try unit_price_cents, unit_price, price_cents, etc.
+                prod_price = getattr(prod, "price_cents", None)
+                if prod_price is None:
+                    # fallback names on Product
+                    prod_price = getattr(prod, "price", None) or getattr(prod, "unit_price_cents", None) or 0
+
+                if hasattr(ol, "price_cents"):
+                    ol.price_cents = prod_price
+                elif hasattr(ol, "unit_price_cents"):
+                    ol.unit_price_cents = prod_price
+                elif hasattr(ol, "unit_price"):
+                    ol.unit_price = prod_price
+                else:
+                    # last-resort: attach attribute (if model truly lacks a column, this is harmless)
+                    setattr(ol, "price_cents", prod_price)
+
+                self.db.add(ol)
+            self.db.commit()
+            self.db.refresh(order)
+        except Exception as e:
+            # cleanup and bubble up
+            self.db.rollback()
+            raise OrderServiceException(f"Failed to create order: {e}")
+
+        # 2) Reserve inventory (transaction-aware)
         reservations = []
         try:
-            for l in lines:
+            for l in items:
+                # Make sure we call reserve(sku, qty) — NOT passing the whole 'lines' list
                 r = self.inventory.reserve(l["sku"], l["qty"])
                 reservations.append(r)
         except InventoryException as e:
@@ -89,117 +156,99 @@ class OrderService:
                     pass
             raise OrderServiceException(f"Inventory reservation failed: {str(e)}")
 
-        # 3) Call payment adapter (idempotent)
+        # 3) Charge payment (with simple retry for transient errors)
         try:
-            # possible transient retry logic
             max_retries = 2
             attempt = 0
-            payment_tx = None
             while True:
                 try:
                     payment_tx = self.payment_adapter.charge(self.db, total_cents, payment_method, idempotency_key=idempotency_key)
-                    break # Successful charge
-                except PaymentTransientError:
+                    break
+                except PaymentTransientError as e:
                     attempt += 1
                     if attempt > max_retries:
-                        raise # Re-raise if retries exceeded
-                    # small backoff
-                    import time; time.sleep(0.2 * (2 ** attempt))
-            
-            # This is the correct position for the two exceptions below, OUTSIDE the while loop:
+                        raise
+                    # small backoff (adapter handles delay)
+                    continue
         except PaymentDeclined as e:
-            # release all reservations
-            for r in reservations:
-                try:
-                    self.inventory.release(r.id)
-                except Exception:
-                    pass # Ignore if release fails
-            
-            # Mark idempotency FAILED upon final decline AFTER releasing reservations
-            if idempotency_key:
-                with smart_transaction(self.db):
-                    self.idem_repo.mark_failed(idempotency_key, f"Payment declined: {str(e)}")
-            
-            raise OrderServiceException(f"Payment declined: {str(e)}") # <-- Raise OrderServiceException here
-        except OrderServiceException:
-            # Re-raise explicit OrderServiceException
-            raise
-        except Exception as e:
-            # unknown payment error -> release and bubble
-            for r in reservations:
-                try:
-                    self.inventory.release(r.id)
-                except Exception:
-                    pass
-            if idempotency_key:
-                with smart_transaction(self.db):
-                    self.idem_repo.mark_failed(idempotency_key, f"Payment failed with unknown error: {str(e)}")
-            raise OrderServiceException(f"Payment failed: {str(e)}") # <-- Raise OrderServiceException here
-
-
-        # 4) Payment succeeded -> create order + invoice + commit reservations
-        # We perform DB work within a transaction
-        with smart_transaction(self.db):
-            order = Order(
-                order_number=self._gen_order_number(),
-                customer_id=customer_id,
-                status="COMPLETED",
-                total_cents=total_cents, # NOTE: Removed the accidental multiplication by 47
-                created_at=datetime.now(timezone.utc), # NOTE: Changed datetime to datetime.now(timezone.utc) for consistency
-                data={"payment_tx": payment_tx}, # NOTE: Changed metadata to data to match model definition
-            )
+            # release reservation and mark order failed
+            try:
+                self.inventory.release(order.id)
+            except Exception:
+                # log but continue
+                pass
+            order.status = "FAILED"
             self.db.add(order)
-            self.db.flush()  # get order.id
-            for l in lines:
-                ol = OrderLine(order_id=order.id, sku=l["sku"], name=l["name"], qty=l["qty"], price_cents=l["price_cents"])
-                self.db.add(ol)
-
-            # create invoice
-            invoice = Invoice(order_id=order.id, invoice_no=f"INV-{uuid4().hex[:8].upper()}", total_cents=total_cents, tax_cents=0)
-            self.db.add(invoice)
-            self.db.flush()
-            # At this point order and invoice exist and have IDs
-            
+            self.db.commit()
+            raise OrderServiceException("Payment declined: " + str(e))
+        except Exception as e:
+            # treat as payment failure: release reservation and mark failed
             try:
-                fulfil = FulfilmentService(self.db)
-                fulfil.create_packing_task_for_order(order.id)
+                self.inventory.release(order.id)
             except Exception:
-                # non-fatal; just log -- do not break order creation
                 pass
+            order.status = "FAILED"
+            self.db.add(order)
+            self.db.commit()
+            raise OrderServiceException("Payment failed: " + str(e))
 
-        # 5) commit reservations (decrement stock)
-        committed_ids = []
+        # 4) Commit inventory (finalize reserved quantities)
         try:
-            for r in reservations:
-                committed = self.inventory.commit(r.id, order_id=order.id)
-                committed_ids.append(committed.id)
-        except Exception as commit_exc:
-            # If commit fails after payment, attempt refund and mark order as REFUNDED/FAILED
+            # commit each reservation we created earlier (pass order.id so reservation records link to the order)
+            for res in reservations:
+                # res is an InventoryReservation instance; commit expects reservation id
+                self.inventory.commit(res.id, order_id=order.id)
+        except InventoryException as commit_exc:
+            # This is a severe issue (payment already captured) — try to compensate by refunding payment, then mark order failed
             try:
-                # attempt refund
-                self.payment_adapter.refund(payment_tx["transaction_id"])
+                if payment_tx and isinstance(payment_tx, dict) and payment_tx.get("transaction_id"):
+                    self.payment_adapter.refund(payment_tx.get("transaction_id"))
             except Exception:
                 pass
-            
-            if idempotency_key:
-                with smart_transaction(self.db):
-                    self.idem_repo.mark_failed(idempotency_key, f"Inventory commit failed: {str(commit_exc)}")
-            # mark order failed/refunded in DB
-            with self.db.begin():
-                order.status = "REFUNDED"
-                self.db.add(order)
+            order.status = "FAILED"
+            self.db.add(order)
+            self.db.commit()
             raise OrderServiceException(f"Inventory commit failed after payment: {str(commit_exc)}")
 
-        # 6) store idempotency response if key provided
+        # 5) Create invoice and mark order completed
+        try:
+            invoice = Invoice(order_id=order.id, invoice_no=f"INV-{uuid4().hex[:8].upper()}", total_cents=total_cents, tax_cents=0, data={"payment": payment_tx})
+            self.db.add(invoice)
+            order.status = "COMPLETED"
+            self.db.add(order)
+            self.db.commit()
+        except Exception as e:
+            # if invoice creation fails, attempt refund (best-effort) and mark order failed
+            try:
+                if payment_tx and isinstance(payment_tx, dict) and payment_tx.get("transaction_id"):
+                    self.payment_adapter.refund(payment_tx.get("transaction_id"))
+            except Exception:
+                pass
+            order.status = "FAILED"
+            self.db.add(order)
+            self.db.commit()
+            raise OrderServiceException(f"Failed to create invoice/order completion: {str(e)}")
+
+        # 6) Enqueue fulfilment / packing task (best-effort)
+        try:
+            fulfil = FulfilmentService(self.db)
+            fulfil.create_packing_task_for_order(order.id)
+        except Exception:
+            # non-fatal for checkout path; log in real app
+            pass
+
+        # 7) store idempotency response if key provided
         resp = {
             "orderId": order.id,
             "orderNumber": order.order_number,
             "status": order.status,
-            "invoiceId": invoice.id,
+            "invoiceId": invoice.id if invoice else None,
             "payment": payment_tx,
         }
-        if idempotency_key:
-            with smart_transaction(self.db):
-            # store the response object for idempotency
-                self.idem_repo.mark_completed(idempotency_key, resp) 
+        if idempotency_key and rec:
+            rec.status = IdempotencyStatus.COMPLETED
+            rec.response_body = resp   # <-- store the actual dict/JSON
+            self.db.add(rec)
+
+        self.db.commit()
         return resp

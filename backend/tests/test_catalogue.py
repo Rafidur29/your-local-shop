@@ -8,18 +8,18 @@ from app.db import SessionLocal
 
 client = TestClient(app)
 
-def setup_module(module):
-    # Recreate DB fresh
-    init_db()
+# def setup_module(module):
+#     # Recreate DB fresh
+#     init_db()
 
-    # Seed minimal product directly for test
-    db = SessionLocal()
-    try:
-        p = Product(sku="TEST-001", name="Test Coffee", description="Test", price_cents=499, stock=10)
-        db.add(p)
-        db.commit()
-    finally:
-        db.close()
+#     # Seed minimal product directly for test
+#     db = SessionLocal()
+#     try:
+#         p = Product(sku="TEST-001", name="Test Coffee", description="Test", price_cents=499, stock=10)
+#         db.add(p)
+#         db.commit()
+#     finally:
+#         db.close()
 
 def test_list_products():
     res = client.get("/api/products")

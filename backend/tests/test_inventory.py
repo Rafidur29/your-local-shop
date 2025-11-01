@@ -8,16 +8,16 @@ from sqlalchemy.orm import sessionmaker
 
 client = TestClient(app)
 
-def setup_module(module):
-    init_db()
-    # Use the normal session for setup, but explicitly commit
-    db = SessionLocal() 
-    try:
-        db.add(Product(sku="RES-1", name="Reserve1", price_cents=100, stock=5))
-        db.add(Product(sku="RES-2", name="Reserve2", price_cents=200, stock=1))
-        db.commit() # Explicit commit needed here
-    finally:
-        db.close()
+# def setup_module(module):
+#     init_db()
+#     # Use the normal session for setup, but explicitly commit
+#     db = SessionLocal() 
+#     try:
+#         db.add(Product(sku="RES-1", name="Reserve1", price_cents=100, stock=5))
+#         db.add(Product(sku="RES-2", name="Reserve2", price_cents=200, stock=1))
+#         db.commit() # Explicit commit needed here
+#     finally:
+#         db.close()
 
 def test_reserve_and_commit():
     db = SessionLocal()

@@ -5,17 +5,17 @@ from app.models.product import Product
 
 client = TestClient(app)
 
-def setup_module(module):
-    init_db()
-    db = SessionLocal()
-    try:
-        db.add(Product(sku="TEST-002", name="Test Coffee", description="Test", price_cents=499, stock=10))
-        db.commit()
-    finally:
-        db.close()
+# def setup_module(module):
+#     init_db()
+#     db = SessionLocal()
+#     try:
+#         db.add(Product(sku="TEST-002", name="Test Coffee", description="Test", price_cents=499, stock=10))
+#         db.commit()
+#     finally:
+#         db.close()
 
 def test_add_item_to_cart():
-    res = client.post("/api/cart/items", json={"sku":"TEST-002", "qty":2})
+    res = client.post("/api/cart/items", json={"sku":"TEST-001", "qty":2})
     assert res.status_code == 200
     body = res.json()
     assert "cart_uuid" in body

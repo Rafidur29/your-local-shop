@@ -26,7 +26,19 @@ class InventoryService:
         """
         Determine available quantity = product.stock - sum(active reservations)
         """
-        product = self.db.query(Product).filter(Product.sku == sku, Product.active == True).first()
+        qry = self.db.query(Product).filter(Product.sku == sku)
+
+        # Only add active filter if the Product model actually has that attribute
+        if hasattr(Product, "active"):
+            qry = qry.filter(Product.active == True)
+
+        # Acquire row-level lock when available (SQLAlchemy with_for_update)
+        try:
+            product = qry.with_for_update().first()
+        except Exception:
+            # Some DB dialects/environments don't support with_for_update; fall back to plain first()
+            product = qry.first()
+
         if not product:
             raise InventoryException("SKU not found")
         now = self._now()
@@ -54,12 +66,15 @@ class InventoryService:
             with lock.acquire(timeout=10):
                 # Use smart_transaction to handle nested tx correctly
                 with smart_transaction(self.db):
-                    product = (
-                        self.db.query(Product)
-                        .filter(Product.sku == sku, Product.active == True)
-                        .with_for_update()
-                        .first()
-                    )
+                    qry = self.db.query(Product).filter(Product.sku == sku)
+                    if hasattr(Product, "active"):
+                        qry = qry.filter(Product.active == True)
+                    try:
+                        product = qry.with_for_update().first()
+                    except Exception:
+                        # some DB backends or in-memory contexts may not support with_for_update; fall back to plain query
+                        product = qry.first()
+
                     if not product:
                         raise InventoryException("SKU not found")
 
@@ -108,13 +123,14 @@ class InventoryService:
         """
         Commit a reservation: decrement product.stock and mark reservation committed.
         """
-        #def _do_commit():
+        # Load the reservation and lock it
         r = self.db.query(InventoryReservation).filter(InventoryReservation.id == reservation_id).with_for_update().first()
         if not r:
             raise InventoryException("Reservation not found")
         if r.status != "reserved":
             raise InventoryException("Reservation not active")
 
+        # Use the SKU from the reservation (was a NameError previously because `sku` didn't exist)
         product = self.db.query(Product).filter(Product.sku == r.sku).with_for_update().first()
         if not product:
             raise InventoryException("SKU not found")
@@ -136,6 +152,7 @@ class InventoryService:
         r.order_id = order_id
         self.db.flush()
         return r
+
 
 
     def expire_overdue(self) -> List[int]:
