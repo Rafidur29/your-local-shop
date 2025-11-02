@@ -1,7 +1,9 @@
-from typing import List, Tuple, Optional
-from sqlalchemy.orm import Session
-from sqlalchemy import func
+from typing import List, Optional, Tuple
+
 from app.models.product import Product
+from sqlalchemy import func
+from sqlalchemy.orm import Session
+
 
 class ProductRepository:
     def __init__(self, db: Session):
@@ -18,18 +20,30 @@ class ProductRepository:
         # return first match; avoid raising in DBs missing fancy features
         return qry.first()
 
-    def list(self, q: Optional[str] = None, page: int = 1, size: int = 20) -> Tuple[List[Product], int]:
+    def list(
+        self, q: Optional[str] = None, page: int = 1, size: int = 20
+    ) -> Tuple[List[Product], int]:
         query = self.db.query(Product)
         if hasattr(Product, "active"):
             query = query.filter(Product.active == True)
         if q:
             like = f"%{q}%"
-            query = query.filter((Product.name.ilike(like)) | (Product.description.ilike(like)))
+            query = query.filter(
+                (Product.name.ilike(like)) | (Product.description.ilike(like))
+            )
         total = query.with_entities(func.count()).scalar() or 0
         items = query.order_by(Product.name).offset((page - 1) * size).limit(size).all()
         return items, total
 
-    def create_or_update(self, sku: str, name: str, price_cents: int, stock: int = 0, description: str = None, image: str = None):
+    def create_or_update(
+        self,
+        sku: str,
+        name: str,
+        price_cents: int,
+        stock: int = 0,
+        description: str = None,
+        image: str = None,
+    ):
         p = self.db.query(Product).filter(Product.sku == sku).first()
         if p:
             p.name = name
@@ -38,7 +52,14 @@ class ProductRepository:
             p.description = description
             p.image = image
         else:
-            p = Product(sku=sku, name=name, price_cents=price_cents, stock=stock, description=description, image=image)
+            p = Product(
+                sku=sku,
+                name=name,
+                price_cents=price_cents,
+                stock=stock,
+                description=description,
+                image=image,
+            )
             self.db.add(p)
         self.db.flush()
         return p

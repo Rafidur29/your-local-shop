@@ -1,18 +1,28 @@
-from sqlalchemy.orm import Session
 from typing import Optional
+
 from app.models.cart import Cart
 from app.models.cart_item import CartItem
 from app.models.product import Product
+from sqlalchemy.orm import Session
+
 
 class CartRepository:
     def __init__(self, db: Session):
         self.db = db
 
     def get_by_uuid(self, cart_uuid: str) -> Optional[Cart]:
-        return self.db.query(Cart).filter(Cart.cart_uuid == cart_uuid, Cart.checked_out == False).first()
+        return (
+            self.db.query(Cart)
+            .filter(Cart.cart_uuid == cart_uuid, Cart.checked_out == False)
+            .first()
+        )
 
     def get_by_customer(self, customer_id: int) -> Optional[Cart]:
-        return self.db.query(Cart).filter(Cart.customer_id == customer_id, Cart.checked_out == False).first()
+        return (
+            self.db.query(Cart)
+            .filter(Cart.customer_id == customer_id, Cart.checked_out == False)
+            .first()
+        )
 
     def create_guest_cart(self, cart_uuid: str) -> Cart:
         c = Cart(cart_uuid=cart_uuid)
@@ -20,20 +30,28 @@ class CartRepository:
         self.db.flush()
         return c
 
-    def add_or_update_item(self, cart: Cart, sku: str, qty: int, price_snapshot: int) -> CartItem:
+    def add_or_update_item(
+        self, cart: Cart, sku: str, qty: int, price_snapshot: int
+    ) -> CartItem:
         item = next((it for it in cart.items if it.sku == sku), None)
         if item:
             item.quantity = qty
             item.price_snapshot = price_snapshot
         else:
-            item = CartItem(cart_id=cart.id, sku=sku, quantity=qty, price_snapshot=price_snapshot)
+            item = CartItem(
+                cart_id=cart.id, sku=sku, quantity=qty, price_snapshot=price_snapshot
+            )
             self.db.add(item)
             cart.items.append(item)
         self.db.flush()
         return item
 
     def remove_item(self, cart: Cart, item_id: int):
-        it = self.db.query(CartItem).filter(CartItem.id == item_id, CartItem.cart_id == cart.id).first()
+        it = (
+            self.db.query(CartItem)
+            .filter(CartItem.id == item_id, CartItem.cart_id == cart.id)
+            .first()
+        )
         if it:
             self.db.delete(it)
             self.db.flush()

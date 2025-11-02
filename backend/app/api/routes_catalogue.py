@@ -1,11 +1,13 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import Optional
-from sqlalchemy.orm import Session
+
 from app.db import get_db
 from app.repositories.product_repo import ProductRepository
 from app.schemas.product_schema import ProductOut
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.orm import Session
 
 router = APIRouter(tags=["catalogue"])
+
 
 @router.get("", summary="List products")
 def list_products(
@@ -34,6 +36,7 @@ def list_products(
         "items": [_to_dict(p) for p in items],
         "total": total,
     }
+
 
 @router.get("/{sku}", summary="Get product by SKU")
 def get_product(sku: str, db: Session = Depends(get_db)):

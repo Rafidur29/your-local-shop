@@ -1,6 +1,8 @@
 from contextlib import contextmanager
-from sqlalchemy.orm import Session
 from typing import Iterator
+
+from sqlalchemy.orm import Session
+
 
 @contextmanager
 def smart_transaction(session: Session) -> Iterator:

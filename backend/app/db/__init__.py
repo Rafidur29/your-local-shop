@@ -1,14 +1,16 @@
 import os
 import sys
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, declarative_base
-from app.config import settings
 from contextlib import contextmanager
+
+from app.config import settings
+from sqlalchemy import create_engine
+from sqlalchemy.orm import declarative_base, sessionmaker
 
 DATABASE_URL = settings.DATABASE_URL
 engine = create_engine(DATABASE_URL, future=True, echo=False)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
+
 
 def init_db():
     """
@@ -21,7 +23,8 @@ def init_db():
 
     Ensure all model modules are imported so metadata is populated.
     """
-    import importlib, traceback
+    import importlib
+    import traceback
 
     # detect request to reset via env var
     env_reset = os.environ.get("RESET_DB", "false").lower() in ("1", "true", "yes")
@@ -86,24 +89,40 @@ def init_db():
         print("Database initialized.")
 
         # --- Ensure canonical test SKUs exist for unit tests (idempotent) ---
-        from app.models.product import Product
         from app.db import SessionLocal as _SessionLocal  # short use session
+        from app.models.product import Product
+
         s = _SessionLocal()
         try:
             required = [
-                {"sku": "TEST-001", "name": "Seed Test 1", "price_cents": 199, "stock": 10},
-                {"sku": "TEST-002", "name": "Seed Test 2", "price_cents": 299, "stock": 10},
-                {"sku": "T1",      "name": "Tea 100g",     "price_cents": 300, "stock": 5},
-                {"sku": "T2",      "name": "Coffee 200g",  "price_cents": 600, "stock": 1},
-                {"sku": "RES-1",   "name": "Reserve1",     "price_cents": 100, "stock": 5},
-                {"sku": "RES-2",   "name": "Reserve2",     "price_cents": 200, "stock": 1},
-                {"sku": "PKG1",    "name": "Test Package", "price_cents": 100, "stock": 1},
-                {"sku": "RET1",    "name": "Returnable",   "price_cents": 500, "stock": 5},
+                {
+                    "sku": "TEST-001",
+                    "name": "Seed Test 1",
+                    "price_cents": 199,
+                    "stock": 10,
+                },
+                {
+                    "sku": "TEST-002",
+                    "name": "Seed Test 2",
+                    "price_cents": 299,
+                    "stock": 10,
+                },
+                {"sku": "T1", "name": "Tea 100g", "price_cents": 300, "stock": 5},
+                {"sku": "T2", "name": "Coffee 200g", "price_cents": 600, "stock": 1},
+                {"sku": "RES-1", "name": "Reserve1", "price_cents": 100, "stock": 5},
+                {"sku": "RES-2", "name": "Reserve2", "price_cents": 200, "stock": 1},
+                {"sku": "PKG1", "name": "Test Package", "price_cents": 100, "stock": 1},
+                {"sku": "RET1", "name": "Returnable", "price_cents": 500, "stock": 5},
             ]
             created = 0
             for ent in required:
                 if not s.query(Product).filter(Product.sku == ent["sku"]).first():
-                    p = Product(sku=ent["sku"], name=ent["name"], price_cents=ent["price_cents"], stock=ent["stock"])
+                    p = Product(
+                        sku=ent["sku"],
+                        name=ent["name"],
+                        price_cents=ent["price_cents"],
+                        stock=ent["stock"],
+                    )
                     if hasattr(p, "description"):
                         p.description = ent.get("description")
                     s.add(p)
@@ -117,7 +136,9 @@ def init_db():
     except Exception:
         # don't blow up init_db if anything goes wrong here; print for diagnostics
         import traceback
+
         print("init_db/create+seed failed:", traceback.format_exc())
+
 
 def get_db():
     db = SessionLocal()

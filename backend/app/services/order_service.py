@@ -1,19 +1,25 @@
-from typing import List, Dict, Optional
-from uuid import uuid4
-from sqlalchemy.orm import Session
 from datetime import datetime, timezone
-from app.models.order import Order, OrderLine, Invoice
-from app.repositories.idempotency_repo import IdempotencyRepository
-from app.services.inventory_service import InventoryService, InventoryException
-from app.adapters.mock_payment import MockPaymentAdapter, PaymentDeclined, PaymentTransientError
+from typing import Dict, List, Optional
+from uuid import uuid4
+
+from app.adapters.mock_payment import (
+    MockPaymentAdapter,
+    PaymentDeclined,
+    PaymentTransientError,
+)
+from app.models.idempotency import IdempotencyRecord, IdempotencyStatus
+from app.models.order import Invoice, Order, OrderLine
 from app.models.product import Product
-from app.utils.transactions import smart_transaction
-from app.models.idempotency import IdempotencyStatus, IdempotencyRecord 
+from app.repositories.idempotency_repo import IdempotencyRepository
 from app.services.fulfilment_service import FulfilmentService
+from app.services.inventory_service import InventoryException, InventoryService
+from app.utils.transactions import smart_transaction
+from sqlalchemy.orm import Session
 
 
 class OrderServiceException(Exception):
     pass
+
 
 class OrderService:
     def __init__(self, db: Session):
@@ -25,27 +31,36 @@ class OrderService:
     def _gen_order_number(self) -> str:
         return f"ORD-{uuid4().hex[:10].upper()}"
 
-    def create_order(self, customer_id: Optional[int], items: List[Dict], payment_method: Dict, idempotency_key: Optional[str] = None) -> Dict:
+    def create_order(
+        self,
+        customer_id: Optional[int],
+        items: List[Dict],
+        payment_method: Dict,
+        idempotency_key: Optional[str] = None,
+    ) -> Dict:
         """
         items: list of {sku: str, qty: int}
         payment_method: dict (mock)
         idempotency_key: string key for idempotency
         Returns a dict response to be returned by API.
         """
-        # --- Idempotency check (fixed) ---
+        # --- Idempotency check (improved) ---
         rec = None
+        created = False
         if idempotency_key:
-            # Expire session so queries read fresh DB state (important!)
-            # 1. Check for COMPLETED status first (retrieve the freshest possible record)
-            rec = self.idem_repo.get(idempotency_key)
+            # quick fresh read
+            try:
+                rec = self.idem_repo.get(idempotency_key)
+            except Exception:
+                rec = None
             try:
                 self.db.expire_all()
             except Exception:
                 pass
 
-            # Helper to check completed status (Keep this helper as it handles both Enum and string states)
             def _is_completed(r):
-                if not r: return False
+                if not r:
+                    return False
                 try:
                     if r.status == IdempotencyStatus.COMPLETED:
                         return True
@@ -57,26 +72,34 @@ class OrderService:
                     return True
                 return False
 
-
-            
             if rec and _is_completed(rec) and getattr(rec, "response_body", None):
-                # Already completed, return the cached result.
                 return rec.response_body
-            
-            # 2. If not found or not completed, attempt to 'begin' the operation.
-            try:
-                # If rec is None (first request) or not COMPLETED (retry/concurrent), this call will
-                # either insert IN_PROGRESS or return the existing IN_PROGRESS record.
-                rec = self.idem_repo.begin(idempotency_key, "create_order")
-            except Exception:
-                raise
-            
-            # 3. Handle IN_PROGRESS state defensively (optional but good practice)
-            # If IN_PROGRESS AND there is a response_body, it suggests an incomplete prior request.
-            if rec.status == IdempotencyStatus.IN_PROGRESS and getattr(rec, "response_body", None):
-                raise OrderServiceException("Duplicate request in progress or prior request is incomplete, try again later")
 
-        # --- Validate items / compute total --- 
+            # Try to create the IN_PROGRESS marker (returns (rec, created))
+            rec, created = self.idem_repo.begin(idempotency_key, "create_order")
+            print(
+                f"[ORDER-IDEMP] begin returned created={created}, rec_id={(rec.id if rec else None)}, status={(rec.status if rec else None)}"
+            )
+
+            # If we did NOT create the marker, wait briefly for the owner to finish and return their result.
+            if not created:
+                if rec and _is_completed(rec) and getattr(rec, "response_body", None):
+                    return rec.response_body
+                import time
+
+                timeout = 2.0
+                start = time.time()
+                while time.time() - start < timeout:
+                    rec = self.idem_repo.get(idempotency_key)
+                    if _is_completed(rec) and getattr(rec, "response_body", None):
+                        return rec.response_body
+                    time.sleep(0.05)
+                # Owner hasn't finished within timeout — refuse to proceed to prevent duplicates
+                raise OrderServiceException(
+                    "Duplicate request in progress, try again later"
+                )
+
+        # --- Validate items / compute total ---
         try:
             total_cents = 0
             # load products and ensure stock exists (use the InventoryService for reservations later)
@@ -99,7 +122,12 @@ class OrderService:
 
         # 1) create order record in IN_PROGRESS
         try:
-            order = Order(order_number=self._gen_order_number(), customer_id=customer_id, status="IN_PROGRESS", total_cents=total_cents)
+            order = Order(
+                order_number=self._gen_order_number(),
+                customer_id=customer_id,
+                status="IN_PROGRESS",
+                total_cents=total_cents,
+            )
             self.db.add(order)
             self.db.flush()
             # create order lines
@@ -120,7 +148,11 @@ class OrderService:
                 prod_price = getattr(prod, "price_cents", None)
                 if prod_price is None:
                     # fallback names on Product
-                    prod_price = getattr(prod, "price", None) or getattr(prod, "unit_price_cents", None) or 0
+                    prod_price = (
+                        getattr(prod, "price", None)
+                        or getattr(prod, "unit_price_cents", None)
+                        or 0
+                    )
 
                 if hasattr(ol, "price_cents"):
                     ol.price_cents = prod_price
@@ -133,6 +165,9 @@ class OrderService:
                     setattr(ol, "price_cents", prod_price)
 
                 self.db.add(ol)
+            print(
+                f"[ORDER-IDEMP] marking completed for key={idempotency_key}, resp_order_id={order.id}"
+            )
             self.db.commit()
             self.db.refresh(order)
         except Exception as e:
@@ -162,7 +197,12 @@ class OrderService:
             attempt = 0
             while True:
                 try:
-                    payment_tx = self.payment_adapter.charge(self.db, total_cents, payment_method, idempotency_key=idempotency_key)
+                    payment_tx = self.payment_adapter.charge(
+                        self.db,
+                        total_cents,
+                        payment_method,
+                        idempotency_key=idempotency_key,
+                    )
                     break
                 except PaymentTransientError as e:
                     attempt += 1
@@ -201,18 +241,30 @@ class OrderService:
         except InventoryException as commit_exc:
             # This is a severe issue (payment already captured) — try to compensate by refunding payment, then mark order failed
             try:
-                if payment_tx and isinstance(payment_tx, dict) and payment_tx.get("transaction_id"):
+                if (
+                    payment_tx
+                    and isinstance(payment_tx, dict)
+                    and payment_tx.get("transaction_id")
+                ):
                     self.payment_adapter.refund(payment_tx.get("transaction_id"))
             except Exception:
                 pass
             order.status = "FAILED"
             self.db.add(order)
             self.db.commit()
-            raise OrderServiceException(f"Inventory commit failed after payment: {str(commit_exc)}")
+            raise OrderServiceException(
+                f"Inventory commit failed after payment: {str(commit_exc)}"
+            )
 
         # 5) Create invoice and mark order completed
         try:
-            invoice = Invoice(order_id=order.id, invoice_no=f"INV-{uuid4().hex[:8].upper()}", total_cents=total_cents, tax_cents=0, data={"payment": payment_tx})
+            invoice = Invoice(
+                order_id=order.id,
+                invoice_no=f"INV-{uuid4().hex[:8].upper()}",
+                total_cents=total_cents,
+                tax_cents=0,
+                data={"payment": payment_tx},
+            )
             self.db.add(invoice)
             order.status = "COMPLETED"
             self.db.add(order)
@@ -220,14 +272,20 @@ class OrderService:
         except Exception as e:
             # if invoice creation fails, attempt refund (best-effort) and mark order failed
             try:
-                if payment_tx and isinstance(payment_tx, dict) and payment_tx.get("transaction_id"):
+                if (
+                    payment_tx
+                    and isinstance(payment_tx, dict)
+                    and payment_tx.get("transaction_id")
+                ):
                     self.payment_adapter.refund(payment_tx.get("transaction_id"))
             except Exception:
                 pass
             order.status = "FAILED"
             self.db.add(order)
             self.db.commit()
-            raise OrderServiceException(f"Failed to create invoice/order completion: {str(e)}")
+            raise OrderServiceException(
+                f"Failed to create invoice/order completion: {str(e)}"
+            )
 
         # 6) Enqueue fulfilment / packing task (best-effort)
         try:
@@ -246,9 +304,21 @@ class OrderService:
             "payment": payment_tx,
         }
         if idempotency_key and rec:
-            rec.status = IdempotencyStatus.COMPLETED
-            rec.response_body = resp   # <-- store the actual dict/JSON
-            self.db.add(rec)
+            try:
+                # store the canonical response and mark COMPLETED
+                self.idem_repo.mark_completed(idempotency_key, resp)
+            except Exception:
+                # fall back to manual write if something goes wrong
+                try:
+                    print(
+                        f"[ORDER-IDEMP] marking completed for key={idempotency_key}, resp_order_id={order.id}"
+                    )
+                    rec.status = IdempotencyStatus.COMPLETED
+                    rec.response_body = resp
+                    self.db.add(rec)
+                    self.db.flush()
+                except Exception:
+                    pass
 
         self.db.commit()
         return resp

@@ -1,7 +1,8 @@
 # backend/app/schemas/product_schema.py
 from typing import Optional
-from pydantic import BaseModel
-from pydantic import ConfigDict
+
+from pydantic import BaseModel, ConfigDict
+
 
 class ProductOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)

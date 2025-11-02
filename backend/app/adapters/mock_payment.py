@@ -1,17 +1,22 @@
-import time
 import random
-from uuid import uuid4
+import time
 from typing import Dict, Optional
+from uuid import uuid4
 
 from app.repositories.idempotency_repo import IdempotencyRepository
 
+
 class PaymentDeclined(Exception):
     """Raised for a non-retryable payment failure (e.g., insufficient funds)."""
+
     pass
+
 
 class PaymentTransientError(Exception):
     """Raised for a temporary gateway error, suggesting a retry is appropriate."""
+
     pass
+
 
 class MockPaymentAdapter:
     """
@@ -24,7 +29,13 @@ class MockPaymentAdapter:
         # Convert delay from milliseconds to seconds for time.sleep
         self.delay_seconds = delay_ms / 1000.0
 
-    def charge(self, db_session, amount_cents: int, payment_method: Dict, idempotency_key: Optional[str] = None):
+    def charge(
+        self,
+        db_session,
+        amount_cents: int,
+        payment_method: Dict,
+        idempotency_key: Optional[str] = None,
+    ):
         """
         Simulates a payment charge. Supports database-backed idempotency check/storage.
 
@@ -33,10 +44,10 @@ class MockPaymentAdapter:
             amount_cents: The amount to charge.
             payment_method: Dictionary containing payment details (can include "force_decline").
             idempotency_key: Optional key to ensure the charge runs only once.
-        
+
         Returns:
             A dictionary representing the successful transaction.
-        
+
         Raises:
             PaymentDeclined: If a deterministic failure is simulated.
             PaymentTransientError: If a random, temporary gateway error is simulated.
@@ -52,7 +63,11 @@ class MockPaymentAdapter:
 
             if rec and getattr(rec, "response_body", None):
                 # response_body may contain partial results like {"payment_result": {...}}
-                pr = rec.response_body.get("payment_result") if isinstance(rec.response_body, dict) else None
+                pr = (
+                    rec.response_body.get("payment_result")
+                    if isinstance(rec.response_body, dict)
+                    else None
+                )
                 if pr:
                     return pr
 
@@ -60,7 +75,11 @@ class MockPaymentAdapter:
         time.sleep(self.delay_seconds)
 
         # Simulate deterministic decline if requested by the test payload
-        if payment_method and isinstance(payment_method, dict) and payment_method.get("force_decline"):
+        if (
+            payment_method
+            and isinstance(payment_method, dict)
+            and payment_method.get("force_decline")
+        ):
             raise PaymentDeclined("Simulated forced decline")
 
         # Simulate a random transient failure (low probability)
@@ -69,33 +88,33 @@ class MockPaymentAdapter:
 
         # --- 2. Simulate Success ---
         txn = {
-            "transaction_id": f"mock-{uuid4().hex}", 
-            "status": "captured", 
-            "amount_cents": amount_cents
+            "transaction_id": f"mock-{uuid4().hex}",
+            "status": "captured",
+            "amount_cents": amount_cents,
         }
-        
+
         # --- 3. Store Idempotency partial result (payment_result) WITHOUT marking overall operation completed ---
         if idempotency_key:
             try:
                 # store partial result into the idempotency record (merge with any existing response_body)
                 self.idempotency_repo.store(
-                    key=idempotency_key, 
-                    operation="charge", 
-                    response_body={"payment_result": txn}
+                    key=idempotency_key,
+                    operation="charge",
+                    response_body={"payment_result": txn},
                 )
                 # ensure the caller's session sees the stored data
                 db_session.flush()
             except Exception:
                 # best-effort: if store fails, just continue — payment succeeded (tests are single-threaded)
                 pass
-            
+
         return txn
 
     def refund(self, transaction_id: str) -> Dict:
         """Simulates a refund."""
         time.sleep(self.delay_seconds)
         return {
-            "refund_id": f"refund-{uuid4().hex}", 
-            "status": "refunded", 
-            "transaction_id": transaction_id
+            "refund_id": f"refund-{uuid4().hex}",
+            "status": "refunded",
+            "transaction_id": transaction_id,
         }

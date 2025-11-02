@@ -1,7 +1,19 @@
+import logging
+
+from app.db import SessionLocal  # new short-lived sessions for atomic begin
+from app.models.idempotency import IdempotencyRecord, IdempotencyStatus
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-from app.models.idempotency import IdempotencyRecord, IdempotencyStatus
-from app.db import SessionLocal  # new short-lived sessions for atomic begin
+
+log = logging.getLogger("idempotency")
+log.setLevel(logging.DEBUG)
+if not log.handlers:
+    import sys
+
+    h = logging.StreamHandler(sys.stdout)
+    h.setFormatter(logging.Formatter("[IDEMPOTENCY] %(message)s"))
+    log.addHandler(h)
+
 
 class IdempotencyRepository:
     def __init__(self, db: Session):
@@ -18,7 +30,11 @@ class IdempotencyRepository:
                 self.db.expire_all()
             except Exception:
                 pass
-            rec = self.db.query(IdempotencyRecord).filter(IdempotencyRecord.key == key).first()
+            rec = (
+                self.db.query(IdempotencyRecord)
+                .filter(IdempotencyRecord.key == key)
+                .first()
+            )
             if rec:
                 try:
                     self.db.refresh(rec)
@@ -26,31 +42,40 @@ class IdempotencyRepository:
                     pass
             return rec
         except Exception:
-            return self.db.query(IdempotencyRecord).filter(IdempotencyRecord.key == key).first()
+            return (
+                self.db.query(IdempotencyRecord)
+                .filter(IdempotencyRecord.key == key)
+                .first()
+            )
 
-    def begin(self, key: str, operation: str) -> IdempotencyRecord:
-            
-        # 1. Check if record already exists and is not IN_PROGRESS (e.g., COMPLETED or FAILED)
-        # Use get() for the freshest state from caller session
-        existing_rec = self.get(key)
-        if existing_rec:
-            # If the record is already there, return it immediately. 
-            # The caller (OrderService) will check its status (COMPLETED)
-            return existing_rec 
+    def begin(self, key: str, operation: str) -> tuple:
+        """
+        Atomically ensure an idempotency row exists.
+        Returns (IdempotencyRecord_from_caller_session, created_flag)
+          - created_flag == True  -> this call successfully created the IN_PROGRESS row (owner)
+          - created_flag == False -> row already existed (concurrent / previous request)
 
-        # 2. If it does not exist (or concurrent attempt), create IN_PROGRESS in a short-lived session (atomic insert)
+        Uses a short-lived SessionLocal() to INSERT+COMMIT so visibility is immediate.
+        """
+        created = False
+        log.debug(f"begin(): trying insert key={key!r}")
         try:
             with SessionLocal() as s:
-                rec = IdempotencyRecord(key=key, operation=operation, status=IdempotencyStatus.IN_PROGRESS)
+                rec = IdempotencyRecord(
+                    key=key, operation=operation, status=IdempotencyStatus.IN_PROGRESS
+                )
                 s.add(rec)
                 s.commit()
+                created = True
         except IntegrityError:
-            # Another request finished first, already exists -> fine. Continue to return the freshest record.
-            pass
+            log.debug(f"begin(): insert collision for key={key!r}")
+            created = False
 
-        # return the freshest record from caller session (this will read the COMPLETED record if the other process committed)
-        rec = self.get(key)
-        return rec
+        # return the record as seen by the caller's session + the created flag
+        log.debug(
+            f"begin(): returning rec.key={self.get(key).key if self.get(key) else None} created={created}"
+        )
+        return self.get(key), created
 
     def store(self, key: str, operation: str, response_body: dict, merge: bool = True):
         """
@@ -61,7 +86,12 @@ class IdempotencyRepository:
         rec = self.get(key)
         if not rec:
             # create a new IN_PROGRESS record with the partial response
-            rec = IdempotencyRecord(key=key, operation=operation, status=IdempotencyStatus.IN_PROGRESS, response_body=response_body)
+            rec = IdempotencyRecord(
+                key=key,
+                operation=operation,
+                status=IdempotencyStatus.IN_PROGRESS,
+                response_body=response_body,
+            )
             self.db.add(rec)
             self.db.flush()
             return rec
@@ -78,18 +108,48 @@ class IdempotencyRepository:
         return rec
 
     def mark_completed(self, key: str, response_body: dict):
-        rec = self.get(key)
-        if not rec:
-            raise RuntimeError("Idempotency record missing")
-        rec.status = IdempotencyStatus.COMPLETED
-        rec.response_body = response_body
-        self.db.flush()
-        return rec
+        """
+        Mark an idempotency record as COMPLETED and persist response_body.
+        Use a short-lived session to ensure the update is committed/visible to other sessions immediately.
+        """
+        # Use a short-lived session to ensure the completed state is committed and visible immediately.
+        try:
+            with SessionLocal() as s:
+                rec = (
+                    s.query(IdempotencyRecord)
+                    .filter(IdempotencyRecord.key == key)
+                    .first()
+                )
+                if not rec:
+                    raise RuntimeError(
+                        "Idempotency record missing for key: " + str(key)
+                    )
+                rec.status = IdempotencyStatus.COMPLETED
+                rec.response_body = response_body
+                s.add(rec)
+                s.commit()
+                log.debug(
+                    f"mark_completed(): key={key!r} response_keys={list(response_body.keys()) if isinstance(response_body, dict) else type(response_body)}"
+                )
+        except Exception:
+            # fallback to caller session update (best-effort)
+            rec = self.get(key)
+            if not rec:
+                raise RuntimeError("Idempotency record missing")
+            rec.status = IdempotencyStatus.COMPLETED
+            rec.response_body = response_body
+            self.db.flush()
+        return self.get(key)
 
     def mark_failed(self, key: str, error_message: str):
         rec = self.get(key)
         if not rec:
-            rec = IdempotencyRecord(key=key, operation="unknown", status=IdempotencyStatus.FAILED, last_error=error_message)
+            rec = IdempotencyRecord(
+                key=key,
+                operation="unknown",
+                status=IdempotencyStatus.FAILED,
+                last_error=error_message,
+            )
             self.db.add(rec)
             self.db.flush()
             return rec

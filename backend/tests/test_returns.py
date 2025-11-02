@@ -1,17 +1,18 @@
 import pytest
-from fastapi.testclient import TestClient
+from app.db import SessionLocal, init_db
 from app.main import app
-from app.db import init_db, SessionLocal
+from app.models.order import Invoice, Order, OrderLine
 from app.models.product import Product
-from app.models.order import Order, OrderLine, Invoice
+from fastapi.testclient import TestClient
 
 client = TestClient(app)
+
 
 @pytest.fixture(scope="session", autouse=True)
 def setup_db():
     init_db()
     db = SessionLocal()
-    
+
     # 1. Setup logic: Create data if it doesn't exist
     try:
         # Check only for the order number to see if seeding is complete
@@ -24,24 +25,34 @@ def setup_db():
             db.commit()
             db.refresh(p1)
 
-
         # Create Order
-        order = Order(order_number="ORD-R1", status="COMPLETED", total_cents=500, customer_id=None)
+        order = Order(
+            order_number="ORD-R1", status="COMPLETED", total_cents=500, customer_id=None
+        )
         db.add(order)
         db.flush()
         # OrderLine uses the correct 'price_cents' now
-        ol = OrderLine(order_id=order.id, sku="RET1", qty=1, price_cents=500, name=p1.name)
+        ol = OrderLine(
+            order_id=order.id, sku="RET1", qty=1, price_cents=500, name=p1.name
+        )
         db.add(ol)
         db.flush()
-        inv = Invoice(order_id=order.id, invoice_no="INV-R1", total_cents=500, tax_cents=0, data={"payment": {"transaction_id": "txn-test-1"}})
+        inv = Invoice(
+            order_id=order.id,
+            invoice_no="INV-R1",
+            total_cents=500,
+            tax_cents=0,
+            data={"payment": {"transaction_id": "txn-test-1"}},
+        )
         db.add(inv)
         db.commit()
-            
+
     finally:
         db.close()
-        
+
     # 2. Yield must occur once to signal fixture is ready
-    yield # Allow tests to run
+    yield  # Allow tests to run
+
 
 def test_create_and_receive_return():
     payload = {"order_id": 1, "lines": [{"sku": "RET1", "qty": 1}]}
@@ -60,6 +71,7 @@ def test_create_and_receive_return():
     r3 = client.get("/api/products")
     prod = next((p for p in r3.json()["items"] if p["sku"] == "RET1"), None)
     assert prod and prod["stock"] == 6
+
 
 def test_idempotent_receive():
     payload = {"order_id": 1, "lines": [{"sku": "RET1", "qty": 1}]}

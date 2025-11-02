@@ -1,9 +1,10 @@
+from app.db import get_db
+from app.services.inventory_service import InventoryException, InventoryService
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from app.db import get_db
-from app.services.inventory_service import InventoryService, InventoryException
 
 router = APIRouter(prefix="/api/inventory", tags=["inventory"])
+
 
 @router.post("/reserve")
 def reserve(payload: dict, db: Session = Depends(get_db)):
@@ -21,10 +22,11 @@ def reserve(payload: dict, db: Session = Depends(get_db)):
             "reservation_id": r.id,
             "sku": r.sku,
             "qty": r.quantity,
-            "reserved_until": r.reserved_until.isoformat()
+            "reserved_until": r.reserved_until.isoformat(),
         }
     except InventoryException as e:
         raise HTTPException(status_code=400, detail=str(e))
+
 
 @router.post("/release")
 def release(payload: dict, db: Session = Depends(get_db)):
@@ -39,6 +41,7 @@ def release(payload: dict, db: Session = Depends(get_db)):
     except InventoryException as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+
 @router.post("/commit")
 def commit(payload: dict, db: Session = Depends(get_db)):
     """
@@ -52,6 +55,7 @@ def commit(payload: dict, db: Session = Depends(get_db)):
         return {"reservation_id": r.id, "status": r.status}
     except InventoryException as e:
         raise HTTPException(status_code=400, detail=str(e))
+
 
 @router.get("/available/{sku}")
 def available(sku: str, db: Session = Depends(get_db)):

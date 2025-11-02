@@ -1,8 +1,10 @@
+import uuid
+from typing import Optional
+
 from app.repositories.cart_repo import CartRepository
 from app.repositories.product_repo import ProductRepository
 from sqlalchemy.orm import Session
-from typing import Optional
-import uuid
+
 
 class CartService:
     def __init__(self, db: Session):
@@ -21,7 +23,7 @@ class CartService:
         self.db.commit()
         return c
 
-    def add_item(self, cart: 'Cart', sku: str, qty: int):
+    def add_item(self, cart: "Cart", sku: str, qty: int):
         product = self.product_repo.get_by_sku(sku)
         if not product:
             raise ValueError("SKU not found")
@@ -32,6 +34,6 @@ class CartService:
         self.db.commit()
         return item
 
-    def remove_item(self, cart: 'Cart', item_id: int):
+    def remove_item(self, cart: "Cart", item_id: int):
         self.cart_repo.remove_item(cart, item_id)
         self.db.commit()

@@ -1,10 +1,10 @@
-import os
 import json
-from fastapi.testclient import TestClient
+import os
+
+from app.db import SessionLocal, engine, init_db
 from app.main import app
-from app.db import init_db, engine
 from app.models.product import Product
-from app.db import SessionLocal
+from fastapi.testclient import TestClient
 
 client = TestClient(app)
 
@@ -21,6 +21,7 @@ client = TestClient(app)
 #     finally:
 #         db.close()
 
+
 def test_list_products():
     res = client.get("/api/products")
     assert res.status_code == 200
@@ -30,6 +31,7 @@ def test_list_products():
     # Expect at least the seeded product
     skus = [it["sku"] for it in body["items"]]
     assert "TEST-001" in skus
+
 
 def teardown_module(module):
     # no-op; dev DB is ephemeral for tests

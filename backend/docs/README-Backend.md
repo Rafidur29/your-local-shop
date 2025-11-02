@@ -112,7 +112,7 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 "Terminal behaviour: leave running server in terminal; open new terminal tab/window for further commands."
 ### For concurrency tests or stable single-run
-```bash 
+```bash
 uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1
 ```
 Leave this running in a terminal for the next steps.

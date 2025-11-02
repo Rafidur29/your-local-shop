@@ -1,6 +1,6 @@
 🛒 Your Local Shop – Frontend
 
-Frontend implementation for **Your Local Shop** (React + TypeScript).  
+Frontend implementation for **Your Local Shop** (React + TypeScript).
 This project handles the client-side flow — catalogue, product details, cart, checkout, and order confirmation — using mock data for now.
 
 ---
@@ -87,4 +87,3 @@ npm run build
 🧑‍💻 Maintainer
 Frontend Developer: Rafid ur Rahman (Rafidur29)
 Repo: https://github.com/Rafidur29/your-local-shop-frontend
-
