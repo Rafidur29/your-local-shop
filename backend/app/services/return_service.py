@@ -2,6 +2,8 @@ from datetime import datetime, timezone
 from typing import Optional
 from uuid import uuid4
 
+from sqlalchemy.orm import Session
+
 from app.adapters.mock_payment import MockPaymentAdapter, PaymentTransientError
 from app.models.credit_note import CreditNote
 from app.models.idempotency import IdempotencyStatus
@@ -12,7 +14,6 @@ from app.models.return_request import ReturnRequest
 from app.repositories.idempotency_repo import IdempotencyRepository
 from app.services.inventory_service import InventoryService
 from app.utils.transactions import smart_transaction
-from sqlalchemy.orm import Session
 
 
 class ReturnServiceException(Exception):

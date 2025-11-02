@@ -1,10 +1,11 @@
 import json
 import os
 
+from fastapi.testclient import TestClient
+
 from app.db import SessionLocal, engine, init_db
 from app.main import app
 from app.models.product import Product
-from fastapi.testclient import TestClient
 
 client = TestClient(app)
 

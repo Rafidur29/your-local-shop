@@ -1,9 +1,10 @@
+from fastapi import APIRouter
+from sqlalchemy import text
+
 from app.adapters.mock_courier import MockCourierAdapter
 from app.adapters.mock_payment import MockPaymentAdapter
 from app.db import SessionLocal, engine
 from app.repositories.idempotency_repo import IdempotencyRepository
-from fastapi import APIRouter
-from sqlalchemy import text
 
 router = APIRouter()
 

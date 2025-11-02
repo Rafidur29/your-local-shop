@@ -2,9 +2,10 @@ import os
 import sys
 from contextlib import contextmanager
 
-from app.config import settings
 from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
+
+from app.config import settings
 
 DATABASE_URL = settings.DATABASE_URL
 engine = create_engine(DATABASE_URL, future=True, echo=False)

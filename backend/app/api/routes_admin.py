@@ -1,10 +1,11 @@
 from typing import List
 
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+
 from app.db import get_db
 from app.models.packing_task import PackingTask
 from app.services.fulfilment_service import FulfilmentException, FulfilmentService
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
 
 # from app.schemas import ( # if you have common schemas; otherwise return raw dicts)
 #     PackingTaskCreate, PackingTaskUpdate, PackingTaskOut

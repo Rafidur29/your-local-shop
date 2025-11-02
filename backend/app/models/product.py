@@ -1,5 +1,6 @@
-from app.db import Base
 from sqlalchemy import Boolean, Column, Integer, String, Text
+
+from app.db import Base
 
 
 class Product(Base):

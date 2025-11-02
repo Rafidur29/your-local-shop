@@ -1,10 +1,11 @@
 from typing import Dict, Optional
 
+from sqlalchemy.orm import Session
+
 from app.adapters.mock_courier import CourierError, MockCourierAdapter
 from app.models.packing_task import PackingTask
 from app.models.shipment import Shipment
 from app.utils.transactions import smart_transaction
-from sqlalchemy.orm import Session
 
 
 class FulfilmentException(Exception):

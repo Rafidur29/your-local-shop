@@ -1,3 +1,7 @@
+# Authored-by: Chung Hee Sii
+# Last Modified: 2 Nov 2025
+# Merged from: feature/backend
+
 # Define the application directory and image name
 BACKEND_DIR = backend
 IMAGE_NAME = yourlocalshop

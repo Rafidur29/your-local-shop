@@ -1,6 +1,7 @@
-from app.db import Base
 from sqlalchemy import Column, ForeignKey, Integer, String
 from sqlalchemy.orm import relationship
+
+from app.db import Base
 
 
 class ReturnLine(Base):

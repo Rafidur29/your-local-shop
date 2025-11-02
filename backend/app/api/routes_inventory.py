@@ -1,7 +1,8 @@
-from app.db import get_db
-from app.services.inventory_service import InventoryException, InventoryService
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+
+from app.db import get_db
+from app.services.inventory_service import InventoryException, InventoryService
 
 router = APIRouter(prefix="/api/inventory", tags=["inventory"])
 

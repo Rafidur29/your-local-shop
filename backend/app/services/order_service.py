@@ -2,6 +2,8 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 from uuid import uuid4
 
+from sqlalchemy.orm import Session
+
 from app.adapters.mock_payment import (
     MockPaymentAdapter,
     PaymentDeclined,
@@ -14,7 +16,6 @@ from app.repositories.idempotency_repo import IdempotencyRepository
 from app.services.fulfilment_service import FulfilmentService
 from app.services.inventory_service import InventoryException, InventoryService
 from app.utils.transactions import smart_transaction
-from sqlalchemy.orm import Session
 
 
 class OrderServiceException(Exception):

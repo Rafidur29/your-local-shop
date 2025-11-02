@@ -1,7 +1,5 @@
 from datetime import datetime, timezone
 
-from app.db import Base
-from app.models.invoice import Invoice
 from sqlalchemy import (
     JSON,
     BigInteger,
@@ -14,6 +12,9 @@ from sqlalchemy import (
     Text,
 )
 from sqlalchemy.orm import relationship
+
+from app.db import Base
+from app.models.invoice import Invoice
 
 
 class Order(Base):

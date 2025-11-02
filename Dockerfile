@@ -1,3 +1,7 @@
+# Owner: Chung
+# Merged from feature/backend
+# Last Modified: 2 Nov 2025
+
 # Stage 1: build
 FROM python:3.13-slim AS build
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -10,34 +14,43 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential gcc libpq-dev curl && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# Copy dependency file from backend/
 COPY backend/requirements.txt /app/backend/
-RUN if [ -f /app/backend/requirements.txt ]; then pip install --upgrade pip && pip install -r /app/backend/requirements.txt; fi
-# Copy all code, including the backend/ folder
+# Install dependencies
+RUN if [ -f backend/requirements.txt ]; then pip install --upgrade pip && pip install -r backend/requirements.txt; fi
+
+# Copy all code. The backend folder is at /app/backend
 COPY . /app
-# ensure package imports resolve, specifically for the 'backend' structure
-ENV PYTHONPATH=/app/backend
 
 # Stage 2: runtime
 FROM python:3.13-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+
+# Determine the binary path for this Python version
+ARG PYTHON_BIN_PATH=/usr/local/bin
+
+# FIX: Add the Python binary path to PATH in the final stage
+ENV PATH="${PYTHON_BIN_PATH}:${PATH}"
+
 WORKDIR /app
 
-# ensure runtime has /usr/local/bin in PATH (default normally is fine)
-ENV PATH="/usr/local/bin:$PATH"
-# ensure python can import the backend package
-ENV PYTHONPATH=/app/backend
-
-# copy libs and source from build stage
+# Copy essential runtime files from build stage
+# Copy site-packages (libraries)
 COPY --from=build /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/site-packages
+# FIX: Copy the Python executables (like uvicorn)
+COPY --from=build ${PYTHON_BIN_PATH} ${PYTHON_BIN_PATH}
+# Copy application code
 COPY --from=build /app /app
 
-# environment defaults (override via docker run)
-ENV DATABASE_URL="sqlite:///./backend/app.db" \
+# Set PYTHONPATH to allow imports like 'from app.api...' inside backend modules
+# ENV PYTHONPATH=/app/backend
+
+# environment defaults
+ENV DATABASE_URL="sqlite:///./app.db" \
     HOST=0.0.0.0 \
     PORT=8000 \
     RESET_DB=0
 
 EXPOSE 8000
-
-# Use python -m uvicorn to avoid depending on console scripts location
-CMD ["python", "-m", "uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+# The CMD should reference the app relative to the PYTHONPATH
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

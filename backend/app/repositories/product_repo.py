@@ -1,8 +1,9 @@
 from typing import List, Optional, Tuple
 
-from app.models.product import Product
 from sqlalchemy import func
 from sqlalchemy.orm import Session
+
+from app.models.product import Product
 
 
 class ProductRepository:

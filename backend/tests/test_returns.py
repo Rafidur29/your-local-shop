@@ -1,9 +1,10 @@
 import pytest
+from fastapi.testclient import TestClient
+
 from app.db import SessionLocal, init_db
 from app.main import app
 from app.models.order import Invoice, Order, OrderLine
 from app.models.product import Product
-from fastapi.testclient import TestClient
 
 client = TestClient(app)
 

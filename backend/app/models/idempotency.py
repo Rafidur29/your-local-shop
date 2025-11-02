@@ -1,8 +1,9 @@
 import enum
 from datetime import datetime, timezone
 
-from app.db import Base
 from sqlalchemy import JSON, Column, DateTime, Enum, Integer, String
+
+from app.db import Base
 
 
 class IdempotencyStatus(enum.Enum):

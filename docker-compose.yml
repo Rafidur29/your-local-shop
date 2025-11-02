@@ -1,3 +1,6 @@
+# authored-by: Chung Hee Sii
+# last-modified: 2 Nov 2025
+# merged-from: feature/backend
 version: "3.8"
 services:
   db:

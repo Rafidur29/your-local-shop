@@ -1,10 +1,11 @@
 from typing import List, Optional
 
-from app.db import get_db
-from app.services.order_service import OrderService, OrderServiceException
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
+
+from app.db import get_db
+from app.services.order_service import OrderService, OrderServiceException
 
 router = APIRouter(tags=["orders"])
 

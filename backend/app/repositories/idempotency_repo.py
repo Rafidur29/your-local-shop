@@ -1,9 +1,10 @@
 import logging
 
-from app.db import SessionLocal  # new short-lived sessions for atomic begin
-from app.models.idempotency import IdempotencyRecord, IdempotencyStatus
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+
+from app.db import SessionLocal  # new short-lived sessions for atomic begin
+from app.models.idempotency import IdempotencyRecord, IdempotencyStatus
 
 log = logging.getLogger("idempotency")
 log.setLevel(logging.DEBUG)

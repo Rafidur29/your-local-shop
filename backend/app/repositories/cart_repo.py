@@ -1,9 +1,10 @@
 from typing import Optional
 
+from sqlalchemy.orm import Session
+
 from app.models.cart import Cart
 from app.models.cart_item import CartItem
 from app.models.product import Product
-from sqlalchemy.orm import Session
 
 
 class CartRepository:

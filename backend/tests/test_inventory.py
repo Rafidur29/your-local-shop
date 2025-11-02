@@ -1,11 +1,12 @@
 import time
 
+from fastapi.testclient import TestClient
+from sqlalchemy.orm import sessionmaker
+
 from app.db import SessionLocal, init_db
 from app.main import app
 from app.models.product import Product
 from app.services.inventory_service import InventoryException, InventoryService
-from fastapi.testclient import TestClient
-from sqlalchemy.orm import sessionmaker
 
 client = TestClient(app)
 

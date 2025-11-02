@@ -1,9 +1,10 @@
 import uuid
 from typing import Optional
 
+from sqlalchemy.orm import Session
+
 from app.repositories.cart_repo import CartRepository
 from app.repositories.product_repo import ProductRepository
-from sqlalchemy.orm import Session
 
 
 class CartService:

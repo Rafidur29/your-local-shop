@@ -1,10 +1,11 @@
 from typing import Optional
 
-from app.db import get_db
-from app.services.cart_service import CartService
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+
+from app.db import get_db
+from app.services.cart_service import CartService
 
 router = APIRouter(prefix="/api/cart", tags=["cart"])
 

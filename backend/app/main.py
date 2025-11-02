@@ -1,4 +1,9 @@
+import os
 from contextlib import asynccontextmanager
+
+from apscheduler.schedulers.background import BackgroundScheduler
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.health import router as health_router
 from app.api.routes_admin import router as admin_router
@@ -11,9 +16,6 @@ from app.config import settings
 from app.db import SessionLocal, init_db
 from app.services.inventory_service import InventoryService
 from app.services.order_service import OrderService
-from apscheduler.schedulers.background import BackgroundScheduler
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 
 
 @asynccontextmanager
@@ -68,3 +70,15 @@ app.include_router(order_router, prefix="/api/orders", tags=["orders"])
 app.include_router(admin_router, tags=["admin"])
 
 app.include_router(returns_router, tags=["returns"])
+
+
+@app.on_event("startup")
+def on_startup():
+    # Use env var RESET_DB=1 in tests/CI to force DB reset & seeding
+    if os.environ.get("RESET_DB", "0") in ("1", "true", "True"):
+        print("Resetting database (RESET_DB set or pytest detected)...")
+        init_db(
+            reset=True
+        )  # ensure your init_db supports reset flag or calls create_all
+    else:
+        init_db(reset=False)

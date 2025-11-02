@@ -1,3 +1,8 @@
+# Pre-commit configuration file
+# Authored-by: Chung Hee Sii
+# Last Modified: 2 Nov 2025
+# Merged from: feature/backend
+
 # Used to enforce code style before commits
 repos:
 - repo: https://github.com/pre-commit/pre-commit-hooks
