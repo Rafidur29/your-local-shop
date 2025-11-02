@@ -1,0 +1,23 @@
+# Used to enforce code style before commits
+repos:
+- repo: https://github.com/pre-commit/pre-commit-hooks
+  rev: v4.4.0
+  hooks:
+    - id: trailing-whitespace
+    - id: end-of-file-fixer
+    - id: check-yaml
+    - id: check-added-large-files
+- repo: https://github.com/psf/black
+  rev: 23.3.0
+  hooks:
+    - id: black
+      # Run black only on files inside the backend directory
+      args: ["--target-version=py311"]
+      files: ^backend/
+- repo: https://github.com/pycqa/isort
+  rev: 5.12.0
+  hooks:
+    - id: isort
+      # Run isort only on files inside the backend directory
+      args: ["--profile", "black"]
+      files: ^backend/

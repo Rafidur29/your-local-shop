@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: [3.13]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+          # Also install pytest/uvicorn in case not pinned in requirements.txt
+          pip install pytest uvicorn
+      - name: Run tests
+        working-directory: ./backend
+        run: |
+          export RESET_DB=1
+          pytest -q
+
+  build-and-push:
+    needs: tests
+    # Only run on a push to main/master (not on PRs)
+    if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Image Variables
+        id: vars
+        run: |
+          # Use secret if provided, otherwise fall back to docker.io/yourlocalshop
+          REPO_NAME="${{ secrets.REGISTRY_REPO }}"
+          if [ -z "$REPO_NAME" ]; then REPO_NAME="docker.io/yourlocalshop"; fi
+          echo "tag=${REPO_NAME}:latest" >> $GITHUB_OUTPUT
+          echo "repo=${REPO_NAME}" >> $GITHUB_OUTPUT
+        shell: bash
+
+      - name: Login to Docker Registry (optional)
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.REGISTRY_USER }}
+          password: ${{ secrets.REGISTRY_TOKEN }}
+        continue-on-error: true
+
+      - name: Build and push image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: ${{ secrets.REGISTRY_TOKEN != '' }}
+          tags: ${{ steps.vars.outputs.tag }}
