@@ -1,8 +1,16 @@
-# Node modules
+# React frontend
 node_modules/
-
-# Build output
 build/
-
-# Environment files
+dist/
 .env*
+
+# Python backend
+.venv/
+__pycache__/
+*.pyc
+app.db
+
+# IDE & OS files
+.vscode/
+.idea/
+.DS_Store
