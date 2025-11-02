@@ -15,7 +15,7 @@ export default function PDP() {
 
   useEffect(() => {
     getProduct(sku).then(setProduct);
-    getInventory(sku).then((inv) => setAvailable(inv.available));
+    getInventory(sku).then((inv: any) => setAvailable(inv.available));
   }, [sku]);
 
   if (!product) return <p style={{ padding: 12 }}>Loading…</p>;

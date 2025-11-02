@@ -1,4 +1,8 @@
 import { http } from "./http";
-export const inventoryApi = {
-  get: (sku: string) => http(`/api/inventory/${sku}`), // backend must provide
+
+export const getInventory = async (sku: string) => {
+  const resp = await http.get(`/api/inventory/${sku}`);
+  return resp.data;
 };
+
+export default { getInventory };

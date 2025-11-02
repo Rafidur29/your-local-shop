@@ -9,10 +9,10 @@ export default function Catalogue() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    listProducts()
-      .then(setData)
-      .catch((e) => setError(String(e)))
-      .finally(() => setLoading(false));
+  listProducts()
+    .then(setData)
+    .catch((e: unknown) => setError(String(e)))
+    .finally(() => setLoading(false));
   }, []);
 
   if (loading) return <p style={{ padding: 12 }}>Loading products…</p>;
